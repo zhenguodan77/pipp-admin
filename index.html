@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pipp 客服后台</title>
+<style>
+  :root { --ink:#2a2520; --muted:#9a8a6e; --gold:#b08d52; --cream:#fbf6ec; --line:rgba(150,130,90,.25); }
+  * { box-sizing: border-box; }
+  html,body { margin:0; height:100%; }
+  body { font-family:-apple-system,"PingFang SC","Helvetica Neue",Arial,sans-serif; background:var(--cream); color:var(--ink); height:100vh; display:flex; flex-direction:column; }
+  header { padding:14px 18px; border-bottom:1px solid var(--line); display:flex; align-items:center; justify-content:space-between; flex-shrink:0; }
+  header h1 { font-size:16px; margin:0; letter-spacing:1px; }
+  header .logout { font-size:12px; color:var(--gold); cursor:pointer; }
+  #login { margin:auto; max-width:340px; width:90%; text-align:center; padding:40px 0; }
+  #login input { width:100%; padding:12px 14px; border:1px solid var(--line); border-radius:12px; font-size:15px; margin:14px 0; background:#fff; }
+  .btn { background:var(--ink); color:var(--cream); border:none; border-radius:12px; padding:11px 18px; font-size:15px; cursor:pointer; }
+  #app { flex:1; display:flex; min-height:0; }
+  #threads { width:300px; border-right:1px solid var(--line); overflow-y:auto; flex-shrink:0; }
+  .thread { padding:12px 16px; border-bottom:1px solid var(--line); cursor:pointer; }
+  .thread:hover, .thread.active { background:rgba(176,141,82,.10); }
+  .thread .name { font-weight:600; font-size:14px; }
+  .thread .last { font-size:12px; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-top:3px; }
+  #convo { flex:1; display:flex; flex-direction:column; min-width:0; }
+  #msgs { flex:1; overflow-y:auto; padding:18px; display:flex; flex-direction:column; gap:10px; }
+  .bubble { max-width:72%; padding:10px 14px; border-radius:16px; font-size:14px; line-height:1.5; white-space:pre-wrap; word-break:break-word; }
+  .bubble.user { align-self:flex-start; background:#fff; border:1px solid var(--line); }
+  .bubble.dev { align-self:flex-end; background:var(--ink); color:var(--cream); }
+  #replybar { display:flex; gap:10px; padding:14px; border-top:1px solid var(--line); flex-shrink:0; }
+  #replybar input { flex:1; padding:11px 14px; border:1px solid var(--line); border-radius:20px; font-size:15px; background:#fff; }
+  .empty { margin:auto; color:var(--muted); font-size:14px; text-align:center; }
+  @media (max-width:640px){ #threads{ width:42%; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>🐾 Pipp 客服后台</h1>
+  <span class="logout" id="logoutBtn" style="display:none" onclick="logout()">退出</span>
+</header>
+
+<div id="login">
+  <p style="color:var(--muted)">输入管理员口令进入</p>
+  <input id="tokenInput" type="password" placeholder="ADMIN_TOKEN" onkeydown="if(event.key==='Enter')login()" />
+  <br><button class="btn" onclick="login()">进入</button>
+  <p id="loginErr" style="color:#c0392b;font-size:12px;display:none">口令不对，再试试</p>
+</div>
+
+<div id="app" style="display:none">
+  <div id="threads"></div>
+  <div id="convo">
+    <div id="msgs"><div class="empty">← 选一个会话开始回复</div></div>
+    <div id="replybar" style="display:none">
+      <input id="replyInput" placeholder="回复…" onkeydown="if(event.key==='Enter')sendReply()" />
+      <button class="btn" onclick="sendReply()">发送</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const BASE = "https://pipp.zhenguodan77.workers.dev";
+let TOKEN = localStorage.getItem("pipp_admin_token") || "";
+let current = null, threadsTimer = null, convoTimer = null;
+
+async function login(){
+  const t = document.getElementById("tokenInput").value.trim();
+  if(!t) return;
+  TOKEN = t;
+  const r = await fetch(BASE+"/admin/threads", { headers:{ "x-admin-token":TOKEN } });
+  if(r.status===200){ localStorage.setItem("pipp_admin_token", TOKEN); enter(); }
+  else { document.getElementById("loginErr").style.display="block"; }
+}
+function logout(){ localStorage.removeItem("pipp_admin_token"); location.reload(); }
+
+function enter(){
+  document.getElementById("login").style.display="none";
+  document.getElementById("app").style.display="flex";
+  document.getElementById("logoutBtn").style.display="inline";
+  loadThreads();
+  clearInterval(threadsTimer); threadsTimer = setInterval(loadThreads, 8000);
+}
+
+async function loadThreads(){
+  try{
+    const r = await fetch(BASE+"/admin/threads", { headers:{ "x-admin-token":TOKEN } });
+    if(r.status!==200) return;
+    const { threads } = await r.json();
+    const el = document.getElementById("threads");
+    if(!threads.length){ el.innerHTML = '<div class="empty" style="padding:24px 12px;font-size:13px">还没有用户留言</div>'; return; }
+    el.innerHTML = "";
+    for(const t of threads){
+      const d = document.createElement("div");
+      d.className = "thread" + (current===t.userId ? " active" : "");
+      const time = t.ts ? new Date(t.ts).toLocaleString("zh-CN",{month:"numeric",day:"numeric",hour:"2-digit",minute:"2-digit"}) : "";
+      d.innerHTML = '<div class="name">'+esc(t.name||"用户")+' <span style="font-weight:400;color:var(--muted);font-size:11px">'+time+'</span></div><div class="last">'+esc(t.last||"")+'</div>';
+      d.onclick = function(){ openThread(t.userId); };
+      el.appendChild(d);
+    }
+  }catch(e){}
+}
+
+async function openThread(uid){
+  current = uid;
+  document.getElementById("replybar").style.display = "flex";
+  loadThreads();
+  await loadConvo();
+  clearInterval(convoTimer); convoTimer = setInterval(loadConvo, 5000);
+}
+
+async function loadConvo(){
+  if(!current) return;
+  try{
+    const r = await fetch(BASE+"/admin/thread?userId="+encodeURIComponent(current), { headers:{ "x-admin-token":TOKEN } });
+    if(r.status!==200) return;
+    const { messages } = await r.json();
+    const el = document.getElementById("msgs");
+    el.innerHTML = "";
+    for(const m of messages){
+      const b = document.createElement("div");
+      b.className = "bubble " + (m.from==="dev" ? "dev" : "user");
+      b.textContent = m.text;
+      el.appendChild(b);
+    }
+    el.scrollTop = el.scrollHeight;
+  }catch(e){}
+}
+
+async function sendReply(){
+  const inp = document.getElementById("replyInput");
+  const t = inp.value.trim();
+  if(!t || !current) return;
+  inp.value = "";
+  await fetch(BASE+"/admin/reply", { method:"POST", headers:{ "x-admin-token":TOKEN, "content-type":"application/json" }, body: JSON.stringify({ userId:current, text:t }) });
+  loadConvo();
+}
+
+function esc(s){ return (s||"").replace(/[&<>]/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;'}[c]; }); }
+
+if(TOKEN){ enter(); }
+</script>
+</body>
+</html>
